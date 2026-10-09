@@ -1,0 +1,98 @@
+# FrioCerto: stack IoT mínima (broker MQTT -> Telegraf -> InfluxDB -> Grafana)
+# Subir:  docker compose up -d        Verificar:  docker compose ps
+name: friocerto
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: friocerto-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+    healthcheck:
+      # $$ evita que o Compose interprete o $ de $SYS; o broker publica $SYS a cada 10 s
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/broker/uptime' -C 1 -W 12 > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 5s
+
+  influxdb:
+    image: influxdb:2
+    container_name: friocerto-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_PASSWORD:-friocerto123}
+      DOCKER_INFLUXDB_INIT_ORG: friocerto
+      DOCKER_INFLUXDB_INIT_BUCKET: sensores
+      # Retenção de ~5 anos + margem (44000 h = 5 anos e 1 semana), exigência da Anvisa (RDC 430/2020)
+      DOCKER_INFLUXDB_INIT_RETENTION: 44000h
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-dev-token-please-change}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  telegraf:
+    image: telegraf:latest
+    container_name: friocerto-telegraf
+    restart: unless-stopped
+    environment:
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-dev-token-please-change}
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      # porta do plugin outputs.health definido no telegraf.conf
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: friocerto-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-friocerto123}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/friocerto.json
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-dev-token-please-change}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || curl -fs http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  mosquitto_data:
+  influxdb_data:
+  influxdb_config:
+  grafana_data:

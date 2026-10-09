@@ -1,0 +1,89 @@
+# Regra de alerta: temperatura fora da faixa 2-8 °C por mais de 5 minutos, uma instância por loja.
+# Se o Grafana não subir por causa deste arquivo, apague-o e crie a regra pela interface
+# (passo a passo no README, seção "Solução de problemas").
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: camara-fria
+    folder: FrioCerto
+    interval: 1m
+    rules:
+      - uid: friocerto-temp-fora-da-faixa
+        title: Temperatura fora da faixa (2-8 °C) por mais de 5 min
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: influxdb-friocerto
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-friocerto
+              intervalMs: 1000
+              maxDataPoints: 43200
+              query: |
+                from(bucket: "sensores")
+                  |> range(start: -10m)
+                  |> filter(fn: (r) => r._measurement == "temperatura_camara" and r._field == "temp_c")
+                  |> map(fn: (r) => ({ r with _value: if r._value < 2.0 or r._value > 8.0 then 1.0 else 0.0 }))
+                  |> keep(columns: ["_time", "_value", "regiao", "loja"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              datasource:
+                type: __expr__
+                uid: __expr__
+              intervalMs: 1000
+              maxDataPoints: 43200
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              datasource:
+                type: __expr__
+                uid: __expr__
+              intervalMs: 1000
+              maxDataPoints: 43200
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+        noDataState: Alerting    # silêncio do sensor também é alarme (decisão A.2.b)
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: "Loja {{ $labels.loja }} ({{ $labels.regiao }}) fora da faixa 2-8 °C há mais de 5 minutos"
+          description: "Acionar o farmacêutico de plantão e avaliar o gerador reserva."
+        labels:
+          severidade: critico
+          cadeia: fria
+        isPaused: false

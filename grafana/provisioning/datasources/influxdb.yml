@@ -1,0 +1,15 @@
+apiVersion: 1
+datasources:
+  - name: InfluxDB FrioCerto
+    uid: influxdb-friocerto
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: true
+    jsonData:
+      version: Flux
+      organization: friocerto
+      defaultBucket: sensores
+      tlsSkipVerify: true
+    secureJsonData:
+      token: ${INFLUX_TOKEN}
